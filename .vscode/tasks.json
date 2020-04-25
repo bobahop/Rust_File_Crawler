@@ -1,0 +1,21 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			//"type": "cargo",
+			"command": "cargo",
+			//"subcommand": "run",
+			"args": [
+				"run",
+				"${file}",
+				"root=c:/Test",
+				"term=bob",
+				"ext=txt,doc"
+			],
+			"problemMatcher": [
+				"$rustc"
+			],
+			"label": "Rust: cargo run"
+		}
+	]
+}
