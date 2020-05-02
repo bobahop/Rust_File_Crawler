@@ -10,7 +10,8 @@
 				"${file}",
 				"root=c:/Test",
 				"term=bob",
-				"ext=txt,doc"
+				"ext=txt,doc",
+				"log=c:/logs/Bob.txt"
 			],
 			"problemMatcher": [
 				"$rustc"

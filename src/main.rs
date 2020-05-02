@@ -4,6 +4,7 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::prelude::*;
 use std::io::BufReader;
 use walkdir::WalkDir;
@@ -23,7 +24,7 @@ impl Error for BobError {}
 
 fn main() {
     let mut args: Vec<String> = env::args().collect();
-    println!("Args are -> {:?}", args);
+    //println!("Args are -> {:?}", args);
 
     if args.contains(&String::from("help")) {
         print_helptext();
@@ -33,18 +34,22 @@ fn main() {
     let mut flags = define_flags();
     let flags = set_flags(&mut args, &mut flags);
 
+    //can't use log_type after moved into log_factory
+    let log_type = String::from(flags["log"]);
+    let log = log_factory(log_type);
+
     if !has_required(&flags) {
-        println!("{}", "There is no term or regexp defined! Example: file_crawler term=\"find me\" or file_crawler regexp=^startswith");
+        log(&format!("{}", "There is no term or regexp defined! Example: file_crawler term=\"find me\" or file_crawler regexp=^startswith"));
         return;
     }
 
     let search_term: Regex;
-    let result = set_search_term(&flags);
+    let result = set_search_term(&flags, &log);
     match result {
         Ok(v) => search_term = v,
         Err(_) => return,
     }
-    println!("{:?}", search_term);
+    //println!("{:?}", search_term);
 
     let ext = flags["ext"];
     let extensions: Vec<Regex>;
@@ -52,14 +57,14 @@ fn main() {
     match result {
         Ok(v) => extensions = v,
         Err(e) => {
-            println!("{}", e.text);
+            log(&format!("{}", e.text));
             return;
         }
     }
-    println!("{:?}", extensions);
+    //println!("{:?}", extensions);
 
     let root = flags["root"];
-    search(&search_term, &root, &extensions);
+    search(&search_term, &root, &extensions, &log);
 }
 
 fn define_flags<'a>() -> HashMap<&'a str, &'a str> {
@@ -91,10 +96,10 @@ fn set_flags<'a>(
     flags: &'a mut HashMap<&'a str, &'a str>,
 ) -> HashMap<&'a str, &'a str> {
     args.retain(|flag| flag.contains('='));
-    println!("Filtered args are -> {:?}", args);
+    //println!("Filtered args are -> {:?}", args);
     for arg in args.iter() {
         let setting: Vec<&str> = arg.splitn(2, '=').collect();
-        println!("setting is -> {:?}", setting);
+        //println!("setting is -> {:?}", setting);
         if setting.len() < 2 {
             continue;
         }
@@ -102,8 +107,8 @@ fn set_flags<'a>(
             flags.insert(setting[0], setting[1]);
         }
     }
-    println!("flags are -> {:?}", flags);
-    println!("Filtered args are -> {:?}", args);
+    //println!("flags are -> {:?}", flags);
+    //println!("Filtered args are -> {:?}", args);
     //we're done changing flags, so return immutable HashMap
     flags.clone()
 }
@@ -112,7 +117,10 @@ fn has_required(flags: &HashMap<&str, &str>) -> bool {
     flags["term"] != "" || flags["regexp"] != ""
 }
 
-fn set_search_term(flags: &HashMap<&str, &str>) -> Result<Regex, regex::Error> {
+fn set_search_term(
+    flags: &HashMap<&str, &str>,
+    logger: &dyn Fn(&str),
+) -> Result<Regex, regex::Error> {
     let term = flags["term"];
     let case = flags["case"];
     let regexp = flags["regexp"];
@@ -120,7 +128,7 @@ fn set_search_term(flags: &HashMap<&str, &str>) -> Result<Regex, regex::Error> {
     match result {
         Ok(v) => Ok(v),
         Err(e) => {
-            print_regerror(&e, &regexp, &case, &term);
+            print_regerror(&e, &regexp, &case, &term, &logger);
             Err(e)
         }
     }
@@ -141,14 +149,20 @@ fn set_regex(regexp: &str, case: &str, term: &str) -> Result<Regex, regex::Error
     }
 }
 
-fn print_regerror(error: &regex::Error, regexp: &str, case: &str, term: &str) {
+fn print_regerror(
+    error: &regex::Error,
+    regexp: &str,
+    case: &str,
+    term: &str,
+    logger: &dyn Fn(&str),
+) {
     if regexp != "" {
-        println!("Problem regexp {} into regex {:?}", regexp, error);
+        logger(&format!("Problem regexp {} into regex {:?}", regexp, error));
     } else {
-        println!(
+        logger(&format!(
             "Problem parsing term \"{}\" and case \"{}\" into regex {:?}",
             term, case, error
-        );
+        ));
     }
 }
 
@@ -184,14 +198,14 @@ fn extensions_factory(ext: &str) -> Result<Vec<Regex>, BobError> {
     Ok(regexts.clone())
 }
 
-fn search(search_reg: &Regex, root: &str, extensions: &Vec<Regex>) {
+fn search(search_reg: &Regex, root: &str, extensions: &Vec<Regex>, logger: &dyn Fn(&str)) {
     for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
         if entry.file_type().is_file() {
             if !is_valid_file(entry.file_name().to_str().unwrap(), extensions) {
                 continue;
             }
             if file_has_match(&entry, &search_reg) {
-                println!("{}", entry.path().to_str().unwrap());
+                logger(&format!("{}", entry.path().to_str().unwrap()));
             }
         }
     }
@@ -219,5 +233,24 @@ fn file_has_match(entry: &walkdir::DirEntry, search_reg: &Regex) -> bool {
     match result {
         Ok(_) => search_reg.is_match(&contents),
         Err(_) => false,
+    }
+}
+
+//log_name String is moved into log_factory so a reference to it can be used in OpenOptions.open.
+//The file appender function needs "move" so it can own the log_file value,
+//otherwise it causes lifetime issues.
+fn log_factory<'a>(log_name: String) -> Box<dyn Fn(&str)> {
+    if log_name == "console" {
+        return Box::new(|msg: &str| print!("{}", msg));
+    } else {
+        return Box::new(move |msg: &str| {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&log_name)
+                .unwrap();
+            file.write_all(msg.as_bytes()).unwrap();
+            file.write_all("\n".as_bytes()).unwrap();
+        });
     }
 }
